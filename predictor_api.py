@@ -37,7 +37,7 @@ def _load_live_data() -> pd.DataFrame:
         # 451 or other error → use Coingecko's free OHLC endpoint
         url = (
           "https://api.coingecko.com/api/v3/coins/bitcoin/ohlc"
-          f"?vs_currency=usd&days=1"
+          f"?vs_currency=usd&days=2"
         )
         data = requests.get(url).json()  # returns [ [time, o,h,l,c], ... ]
         df   = pd.DataFrame(data[-(TIME_STEP+50):], columns=['ts','open','high','low','close'])
