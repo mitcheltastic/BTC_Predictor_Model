@@ -1,0 +1,13 @@
+# Python virtual env
+.venv
+
+# Bytecode
+__pycache__/
+*.py[cod]
+
+# Live‐updating data dump
+data
+
+predictor.py
+updater.py
+
