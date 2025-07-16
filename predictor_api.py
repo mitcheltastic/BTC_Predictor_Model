@@ -8,6 +8,7 @@ import pandas_ta as ta
 from joblib import load
 from tensorflow.keras.models import load_model
 import ccxt
+import requests
 
 # ─── PATH SETUP ─────────────────────────
 BASE_DIR   = os.path.dirname(__file__)
@@ -25,10 +26,22 @@ _model  = load_model(os.path.join(MODEL_DIR, "baru.h5"))
 _scaler = load(os.path.join(MODEL_DIR, "scaler.joblib"))
 
 def _load_live_data() -> pd.DataFrame:
-    """Fetch the latest 1m OHLCV from Binance and return a DataFrame."""
-    ex   = ccxt.binance()
-    bars = ex.fetch_ohlcv('BTC/USDT', timeframe='1m', limit=TIME_STEP + 50)
-    df   = pd.DataFrame(bars, columns=['ts','open','high','low','close','volume'])
+    """
+    Try Binance first; if unavailable, fall back to Coingecko OHLC.
+    """
+    try:
+        ex   = ccxt.binance()
+        bars = ex.fetch_ohlcv('BTC/USDT', timeframe='1m', limit=TIME_STEP + 50)
+        df   = pd.DataFrame(bars, columns=['ts','open','high','low','close','volume'])
+    except Exception as e:
+        # 451 or other error → use Coingecko's free OHLC endpoint
+        url = (
+          "https://api.coingecko.com/api/v3/coins/bitcoin/ohlc"
+          f"?vs_currency=usd&days=1"
+        )
+        data = requests.get(url).json()  # returns [ [time, o,h,l,c], ... ]
+        df   = pd.DataFrame(data[-(TIME_STEP+50):], columns=['ts','open','high','low','close'])
+        df['volume'] = 0  # Coingecko OHLC has no volume
     df['Date'] = pd.to_datetime(df['ts'], unit='ms')
     df.set_index('Date', inplace=True)
     return df.rename(columns={
