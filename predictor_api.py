@@ -9,6 +9,7 @@ from pathlib import Path
 from joblib import load
 from tensorflow.keras.models import load_model
 import requests
+import sys
 
 # ─── PATH SETUP ─────────────────────────
 BASE_DIR         = Path(__file__).parent
@@ -31,9 +32,11 @@ def _fetch_binance_rest() -> pd.DataFrame:
     Fetch latest 1m OHLCV via Worker proxy if set, otherwise direct.
     """
     base_url = BINANCE_PROXY_URL or "https://api.binance.com"
+    print(f"[DEBUG] _fetch_binance_rest using base_url = {base_url}", file=sys.stderr)
     url      = f"{base_url}/api/v3/klines"
     params   = {"symbol": "BTCUSDT", "interval": "1m", "limit": TIME_STEP + 50}
     resp     = requests.get(url, params=params, timeout=10)
+    print(f"[DEBUG] Binance REST GET {resp.url} → {resp.status_code}", file=sys.stderr)
     resp.raise_for_status()
     data = resp.json()
 
@@ -100,11 +103,14 @@ def _load_live_data() -> pd.DataFrame:
     for fetch in (_fetch_binance_rest, _fetch_coincap, _fetch_coingecko):
         try:
             df = fetch()
+            print(f"[DEBUG] {_fetch_binance_rest.__name__ if fetch is _fetch_binance_rest else fetch.__name__} succeeded, {len(df)} rows", file=sys.stderr)
             if len(df) >= TIME_STEP + 50:
                 return df
         except Exception:
+            print(f"[DEBUG] {fetch.__name__} failed: {e}", file=sys.stderr)
             continue
-
+    
+    print("[DEBUG] Falling back to CSV", file=sys.stderr)
     # final fallback to static CSV
     df = pd.read_csv(CSV_PATH, index_col=0, parse_dates=True)
     df = df.rename(columns={
