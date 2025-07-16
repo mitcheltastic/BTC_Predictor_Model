@@ -27,30 +27,36 @@ _scaler = load(os.path.join(MODEL_DIR, "scaler.joblib"))
 
 def _load_live_data() -> pd.DataFrame:
     """
-    Try Binance first; if unavailable, fall back to Coingecko OHLC.
+    Try Binance first; if unavailable or data is too short,
+    fall back to the local CSV in data/BTC_DATA_V3.0.csv.
     """
+    from pathlib import Path
+
     try:
         ex   = ccxt.binance()
         bars = ex.fetch_ohlcv('BTC/USDT', timeframe='1m', limit=TIME_STEP + 50)
         df   = pd.DataFrame(bars, columns=['ts','open','high','low','close','volume'])
-    except Exception as e:
-        # 451 or other error → use Coingecko's free OHLC endpoint
-        url = (
-          "https://api.coingecko.com/api/v3/coins/bitcoin/ohlc"
-          f"?vs_currency=usd&days=2"
-        )
-        data = requests.get(url).json()  # returns [ [time, o,h,l,c], ... ]
-        df   = pd.DataFrame(data[-(TIME_STEP+50):], columns=['ts','open','high','low','close'])
-        df['volume'] = 0  # Coingecko OHLC has no volume
-    df['Date'] = pd.to_datetime(df['ts'], unit='ms')
-    df.set_index('Date', inplace=True)
-    return df.rename(columns={
-        'close':'Price',
-        'volume':'Vol.',
-        'open':'Open',
-        'high':'High',
-        'low':'Low'
-    })
+        df['Date'] = pd.to_datetime(df['ts'], unit='ms')
+        df.set_index('Date', inplace=True)
+        df = df.rename(columns={
+          'close':'Price','volume':'Vol.',
+          'open':'Open','high':'High','low':'Low'
+        })
+        # If we got fewer than TIME_STEP+50 rows, fallback
+        if len(df) < TIME_STEP + 50:
+            raise ValueError("Not enough live bars")
+        return df
+    except Exception:
+        # FALLBACK: read your updater CSV
+        csv_path = Path(__file__).parent / "data" / "BTC_DATA_V3.0.csv"
+        df = pd.read_csv(csv_path, index_col=0, parse_dates=True)
+        # ensure naming consistency
+        df = df.rename(columns={
+          'Price':'Price','Vol.':'Vol.',
+          'Open':'Open','High':'High','Low':'Low'
+        })
+        return df
+
 
 def _prepare_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     """
