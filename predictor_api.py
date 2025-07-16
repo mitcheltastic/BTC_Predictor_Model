@@ -8,7 +8,6 @@ import pandas_ta as ta
 from pathlib import Path
 from joblib import load
 from tensorflow.keras.models import load_model
-import ccxt
 import requests
 
 # ─── PATH SETUP ─────────────────────────
@@ -29,6 +28,10 @@ _scaler = load(MODEL_DIR / "scaler.joblib")
 
 
 def _fetch_binance() -> pd.DataFrame:
+    """
+    Fetch latest 1m OHLCV from Binance.
+    """
+    import ccxt
     exchange = ccxt.binance()
     bars = exchange.fetch_ohlcv('BTC/USDT', timeframe='1m', limit=TIME_STEP + 50)
     df = pd.DataFrame(bars, columns=['ts','open','high','low','close','volume'])
@@ -44,22 +47,25 @@ def _fetch_binance() -> pd.DataFrame:
 
 
 def _fetch_coingecko() -> pd.DataFrame:
-    # days=1 gives you ~1440 1-minute bars
+    """
+    Fetch 1m OHLC for past day from CoinGecko (no volume).
+    """
     url = "https://api.coingecko.com/api/v3/coins/bitcoin/ohlc"
     params = {"vs_currency": "usd", "days": 1}
     resp = requests.get(url, params=params, timeout=5)
+    resp.raise_for_status()
     data = resp.json()  # [[time, open, high, low, close], ...]
     df = pd.DataFrame(data, columns=['ts','Open','High','Low','Price'])
     df['Date'] = pd.to_datetime(df['ts'], unit='ms')
     df.set_index('Date', inplace=True)
-    df['Vol.'] = 0.0  # Coingecko OHLC doesn’t include volume
+    df['Vol.'] = 0.0
     return df
 
 
 def _load_live_data() -> pd.DataFrame:
     """
-    Try Binance first, then CoinGecko, then fall back to local CSV.
-    Always returns at least TIME_STEP+50 rows.
+    Attempt Binance → CoinGecko → local CSV fallback.
+    Guarantees at least TIME_STEP+50 rows.
     """
     # 1) Binance
     try:
@@ -77,16 +83,17 @@ def _load_live_data() -> pd.DataFrame:
     except Exception:
         pass
 
-    # 3) Local CSV as last resort
+    # 3) Local CSV fallback
     df = pd.read_csv(CSV_PATH, index_col=0, parse_dates=True)
-    # ensure column names line up
-    df = df.rename(columns={
-      'Price':'Price','Vol.':'Vol.','Open':'Open','High':'High','Low':'Low'
+    return df.rename(columns={
+        'Price':'Price', 'Vol.':'Vol.', 'Open':'Open', 'High':'High', 'Low':'Low'
     })
-    return df
 
 
 def _prepare_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Compute RSI, MACD, SMA_15 on 'Price', drop NaNs.
+    """
     df['Vol.'] = df['Vol.'].astype(float)
     df.ta.rsi(close=df['Price'], append=True)
     df.ta.macd(close=df['Price'], append=True)
@@ -95,13 +102,17 @@ def _prepare_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def make_prediction() -> dict:
-    # 1) Load & slice live data
+    """
+    Fetch & slice live data, prepare inputs, run the model,
+    and return a summary dict with time, prices, action, SL, TP.
+    """
+    # 1) Load live data
     df = _load_live_data().tail(TIME_STEP + 50)
 
     # 2) Keep base features
     df = df[['Price','Open','High','Low','Vol.']]
 
-    # 3) Indicators & cleanup
+    # 3) Indicators & cleaning
     df = _prepare_dataframe(df)
     window = df.tail(TIME_STEP)
     if len(window) < TIME_STEP:
@@ -112,8 +123,8 @@ def make_prediction() -> dict:
     window = window[feature_cols]
     scaled = _scaler.transform(window)
 
-    # 5) Predict & inverse‐scale
-    X      = scaled.reshape(1, TIME_STEP, scaled.shape[1])
+    # 5) Predict & inverse-scale
+    X = scaled.reshape(1, TIME_STEP, scaled.shape[1])
     pred_s = _model.predict(X, verbose=0)[0,0]
     dummy  = np.zeros((1, scaled.shape[1])); dummy[0,0] = pred_s
     pred_p = _scaler.inverse_transform(dummy)[0,0]
@@ -124,15 +135,11 @@ def make_prediction() -> dict:
     # 7) Trading logic
     action, sl, tp = "HOLD", None, None
     if pred_p > curr_p * (1 + BUY_THRESHOLD):
-        action = "STRONG BUY"
-        sl     = curr_p * (1 - SL_PCT)
-        tp     = curr_p * (1 + TP_PCT)
+        action, sl, tp = "STRONG BUY", curr_p*(1-SL_PCT), curr_p*(1+TP_PCT)
     elif pred_p < curr_p * (1 - SELL_THRESHOLD):
-        action = "STRONG SELL"
-        sl     = curr_p * (1 + SL_PCT)
-        tp     = curr_p * (1 - TP_PCT)
+        action, sl, tp = "STRONG SELL", curr_p*(1+SL_PCT), curr_p*(1-TP_PCT)
 
-    # 8) Return
+    # 8) Return result
     return {
         "time":            datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "current_price":   float(curr_p),
