@@ -27,6 +27,25 @@ _model  = load_model(MODEL_DIR / "baru.h5")
 _scaler = load(MODEL_DIR / "scaler.joblib")
 
 
+def _fetch_kraken() -> pd.DataFrame:
+    """
+    Fetch latest 1m OHLCV from Kraken Public API (unblocked)
+    """
+    import time
+    since = int(time.time()) - (TIME_STEP + 50) * 60
+    url = "https://api.kraken.com/0/public/OHLC"
+    params = {"pair": "XBTUSDT", "interval": 1, "since": since}
+    resp = requests.get(url, params=params, timeout=10)
+    resp.raise_for_status()
+    data = resp.json()
+    # result may have key for pair
+    result = list(data.get('result', {}).values())[0]
+    df = pd.DataFrame(result, columns=["time","Open","High","Low","Close","Vwap","Volume","Count"])
+    df['Date'] = pd.to_datetime(df['time'], unit='s')
+    df.set_index('Date', inplace=True)
+    df = df.rename(columns={'Close':'Price','Volume':'Vol.'})[["Open","High","Low","Price","Vol."]]
+    return df.astype(float)
+
 def _fetch_binance_rest() -> pd.DataFrame:
     """
     Fetch latest 1m OHLCV via Worker proxy if set, otherwise direct.
