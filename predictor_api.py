@@ -17,8 +17,8 @@ CSV_PATH  = BASE_DIR / "data" / "BTC_DATA_V3.0.csv"
 
 # ─── CONSTANTS ──────────────────────────
 TIME_STEP      = 60
-BUY_THRESHOLD  = 0.0005
-SELL_THRESHOLD = 0.0005
+BUY_THRESHOLD  = 0.0002  # 0.02% threshold
+SELL_THRESHOLD = 0.0002
 SL_PCT         = 0.001   # 0.1% stop-loss
 TP_PCT         = 0.005   # 0.5% take-profit
 
@@ -48,13 +48,13 @@ def _fetch_binance() -> pd.DataFrame:
 
 def _fetch_coingecko() -> pd.DataFrame:
     """
-    Fetch 1m OHLC for past day from CoinGecko (no volume).
+    Fetch 1m OHLC for past 2 days from CoinGecko (no volume).
     """
     url = "https://api.coingecko.com/api/v3/coins/bitcoin/ohlc"
-    params = {"vs_currency": "usd", "days": 1}
+    params = {"vs_currency": "usd", "days": 2}  # <-- changed to 2 days
     resp = requests.get(url, params=params, timeout=5)
     resp.raise_for_status()
-    data = resp.json()  # [[time, open, high, low, close], ...]
+    data = resp.json()
     df = pd.DataFrame(data, columns=['ts','Open','High','Low','Price'])
     df['Date'] = pd.to_datetime(df['ts'], unit='ms')
     df.set_index('Date', inplace=True)
@@ -91,9 +91,6 @@ def _load_live_data() -> pd.DataFrame:
 
 
 def _prepare_dataframe(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Compute RSI, MACD, SMA_15 on 'Price', drop NaNs.
-    """
     df['Vol.'] = df['Vol.'].astype(float)
     df.ta.rsi(close=df['Price'], append=True)
     df.ta.macd(close=df['Price'], append=True)
@@ -124,7 +121,7 @@ def make_prediction() -> dict:
     scaled = _scaler.transform(window)
 
     # 5) Predict & inverse-scale
-    X = scaled.reshape(1, TIME_STEP, scaled.shape[1])
+    X      = scaled.reshape(1, TIME_STEP, scaled.shape[1])
     pred_s = _model.predict(X, verbose=0)[0,0]
     dummy  = np.zeros((1, scaled.shape[1])); dummy[0,0] = pred_s
     pred_p = _scaler.inverse_transform(dummy)[0,0]
