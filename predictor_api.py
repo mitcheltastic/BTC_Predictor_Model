@@ -29,7 +29,7 @@ _scaler = load(MODEL_DIR / "scaler.joblib")
 
 def _fetch_kraken() -> pd.DataFrame:
     """
-    Fetch latest 1m OHLCV from Kraken Public API (unblocked)
+    Fetch latest 1m OHLCV from Kraken Public API (unblocked).
     """
     import time
     since = int(time.time()) - (TIME_STEP + 50) * 60
@@ -38,13 +38,13 @@ def _fetch_kraken() -> pd.DataFrame:
     resp = requests.get(url, params=params, timeout=10)
     resp.raise_for_status()
     data = resp.json()
-    # result may have key for pair
     result = list(data.get('result', {}).values())[0]
     df = pd.DataFrame(result, columns=["time","Open","High","Low","Close","Vwap","Volume","Count"])
     df['Date'] = pd.to_datetime(df['time'], unit='s')
     df.set_index('Date', inplace=True)
     df = df.rename(columns={'Close':'Price','Volume':'Vol.'})[["Open","High","Low","Price","Vol."]]
     return df.astype(float)
+
 
 def _fetch_binance_rest() -> pd.DataFrame:
     """
@@ -108,7 +108,8 @@ def _fetch_coingecko() -> pd.DataFrame:
 
 
 def _load_live_data() -> pd.DataFrame:
-    for fetch in (_fetch_binance_rest, _fetch_coincap, _fetch_coingecko):
+    # try Kraken first
+    for fetch in (_fetch_kraken, _fetch_binance_rest, _fetch_coincap, _fetch_coingecko):
         try:
             df = fetch()
             print(f"[DEBUG] {fetch.__name__} succeeded with {len(df)} rows", file=sys.stderr)
