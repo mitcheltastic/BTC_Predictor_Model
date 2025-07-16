@@ -1,37 +1,39 @@
 import streamlit as st
-from predictor_api import make_prediction
 import pandas as pd
+from predictor_api import make_prediction
 
 # Page setup
 st.set_page_config(page_title="BTC AI Predictor", layout="wide")
 st.title("🔮 1-Hour BTC Price Prediction")
 
-# Fetch data
+# Fetch
 result = make_prediction()
 
 if "error" in result:
     st.warning(result["error"])
 else:
-    c1, c2, c3, c4 = st.columns(4, gap="large")
-    c1.metric("Current Price",   f"${result['current_price']:,.2f}")
-    c2.metric("Predicted Price", f"${result['predicted_price']:,.2f}")
-    c3.metric("Suggestion",      result["action"])
+    # Layout
+    col1, col2, col3, col4 = st.columns(4, gap="large")
+    col1.metric("Current Price",   f"${result['current_price']:,.2f}")
+    col2.metric("Predicted Price", f"${result['predicted_price']:,.2f}")
+    col3.metric("Suggestion",      result["action"])
     
-    sl = result.get("stop_loss")
-    tp = result.get("take_profit")
+    # Always compute SL/TP around current price
+    sl = result["current_price"] * (1 - result.get("SL_PCT", 0.003))
+    tp = result["current_price"] * (1 + result.get("TP_PCT", 0.009))
+    
+    # Build SL/TP table
+    sltp_df = pd.DataFrame({
+        "Type":  ["Stop Loss", "Take Profit"],
+        "Value": [f"${sl:,.2f}", f"${tp:,.2f}"]
+    })
+    col4.table(sltp_df)
 
-    if sl is not None and tp is not None:
-        # Build a small DataFrame for SL/TP
-        df_sl_tp = pd.DataFrame({
-            "Type":  ["Stop Loss", "Take Profit"],
-            "Value": [f"${sl:,.2f}",  f"${tp:,.2f}"]
-        })
-        c4.table(df_sl_tp)
-    else:
-        c4.write("—")
-
+    # Last update
     st.markdown(f"*Last update:* {result['time']}")
 
 st.markdown("---")
+
+# Refresh button (this inherently reruns the script)
 if st.button("🔄 Refresh Now"):
-    st.experimental_rerun()
+    pass
