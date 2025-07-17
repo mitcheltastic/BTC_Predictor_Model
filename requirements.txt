@@ -5,6 +5,8 @@ pandas-ta==0.3.14b0
 matplotlib==3.8.4
 scikit-learn==1.4.2
 joblib==1.4.2
-ccxt==4.4.94
 streamlit==1.46.1
 requests>=2.31.0
+fastapi
+uvicorn
+pytz

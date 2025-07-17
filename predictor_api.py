@@ -1,5 +1,3 @@
-# predictor_api.py
-
 import os
 import datetime
 import numpy as np
@@ -9,18 +7,19 @@ from pathlib import Path
 from joblib import load
 from tensorflow.keras.models import load_model
 import requests
+import pytz
 
-# ─── PATH SETUP ─────────────────────────
+# --- PATH SETUP ---
 BASE_DIR  = Path(__file__).parent
 MODEL_DIR = BASE_DIR / "Model1min"
 CSV_PATH  = BASE_DIR / "data" / "BTC_DATA_V3.0.csv"
 
-# ─── CONSTANTS ──────────────────────────
+# --- CONSTANTS ---
 TIME_STEP      = 60
 BUY_THRESHOLD  = 0.0002  # 0.02% threshold for signal
 SELL_THRESHOLD = 0.0002
 
-# ─── LOAD MODEL & SCALER ONCE ───────────
+# --- LOAD MODEL & SCALER ONCE ---
 _model  = load_model(MODEL_DIR / "baru.h5")
 _scaler = load(MODEL_DIR / "scaler.joblib")
 
@@ -39,6 +38,10 @@ def _fetch_kraken() -> pd.DataFrame:
     # extract OHLC array for XBTUSDT
     ohlc = list(data.get('result', {}).values())[0]
     df = pd.DataFrame(ohlc, columns=["time","Open","High","Low","Close","Vwap","Volume","Count"])
+    
+    # --- ADDED LOGGING ---
+    print(f"Successfully fetched {len(df)} rows of data from Kraken.")
+
     df['Date'] = pd.to_datetime(df['time'], unit='s')
     df.set_index('Date', inplace=True)
     df = df.rename(columns={'Close':'Price','Volume':'Vol.'})[["Open","High","Low","Price","Vol."]]
@@ -53,10 +56,12 @@ def _load_live_data() -> pd.DataFrame:
         df = _fetch_kraken()
         if len(df) >= TIME_STEP + 50:
             return df
-    except Exception:
+    except Exception as e:
+        print(f"Could not fetch from Kraken, falling back to CSV. Error: {e}")
         pass
 
     # Fallback to static CSV
+    print("Fetching data from local CSV file.")
     df = pd.read_csv(CSV_PATH, index_col=0, parse_dates=True)
     df = df.rename(columns={
         'Price':'Price', 'Vol.':'Vol.', 'Open':'Open', 'High':'High', 'Low':'Low'
@@ -120,11 +125,15 @@ def make_prediction() -> dict:
         sl     = curr_p * (1 + buffer)
         tp     = pred_p * (1 + buffer)
 
+    # --- TIMEZONE ADJUSTMENT ---
+    jakarta_tz = pytz.timezone('Asia/Jakarta')
+    now_jakarta = datetime.datetime.now(jakarta_tz)
+
     return {
-        "time":            datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "time":              now_jakarta.strftime("%Y-%m-%d %H:%M:%S"),
         "current_price":   float(curr_p),
         "predicted_price": float(pred_p),
-        "action":          action,
+        "action":            action,
         "stop_loss":       sl,
         "take_profit":     tp
     }
