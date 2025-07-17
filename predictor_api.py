@@ -47,7 +47,8 @@ def _fetch_kraken() -> pd.DataFrame:
     return df.astype(float)
 
 
-def _load_live__data() -> pd.DataFrame:
+def _load_live_data() -> pd.DataFrame:
+    
     """
     Try Kraken first, then fallback to local CSV.
     """
