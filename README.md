@@ -1,4 +1,5 @@
 # BTC 1-Hour Price Predictor
+# Mitch-Bagas-Andy
 
 **Live** Streamlit dashboard forecasting Bitcoin’s price 1 hour out.
 - Fetches real-time OHLCV via CCXT.
