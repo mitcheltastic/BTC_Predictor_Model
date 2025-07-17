@@ -1,81 +1,138 @@
-# predictor_api.py
-import yfinance as yf
+import os
+import datetime
+import numpy as np
 import pandas as pd
 import pandas_ta as ta
-import numpy as np
+from pathlib import Path
+from joblib import load
 from tensorflow.keras.models import load_model
-import joblib
-from datetime import datetime
+import requests
 import pytz
 
-# --- Constants ---
-MODEL_PATH = "Model1min/baru.h5"
-SCALER_PATH = "Model1min/scaler.joblib"
-TIMEZONE = pytz.timezone("Asia/Jakarta") # Adjust to your timezone if needed
+# --- PATH SETUP ---
+BASE_DIR  = Path(__file__).parent
+MODEL_DIR = BASE_DIR / "Model1min"
+CSV_PATH  = BASE_DIR / "data" / "BTC_DATA_V3.0.csv"
 
-def load_heavy_assets():
+# --- CONSTANTS ---
+TIME_STEP      = 60
+BUY_THRESHOLD  = 0.0002  # 0.02% threshold for signal
+SELL_THRESHOLD = 0.0002
+
+# --- LOAD MODEL & SCALER ONCE ---
+_model  = load_model(MODEL_DIR / "baru.h5")
+_scaler = load(MODEL_DIR / "scaler.joblib")
+
+
+def _fetch_kraken() -> pd.DataFrame:
     """
-    Loads the pre-trained model and scaler from disk.
-    This is the slow, memory-intensive part that we will now do only ONCE.
+    Fetch latest 1m OHLCV from Kraken Public API (unblocked).
+    """
+    import time
+    since = int(time.time()) - (TIME_STEP + 50) * 60
+    url = "https://api.kraken.com/0/public/OHLC"
+    params = {"pair": "XBTUSDT", "interval": 1, "since": since}
+    resp = requests.get(url, params=params, timeout=10)
+    resp.raise_for_status()
+    data = resp.json()
+    # extract OHLC array for XBTUSDT
+    ohlc = list(data.get('result', {}).values())[0]
+    df = pd.DataFrame(ohlc, columns=["time","Open","High","Low","Close","Vwap","Volume","Count"])
+    
+    print(f"Successfully fetched {len(df)} rows of data from Kraken.")
+
+    df['Date'] = pd.to_datetime(df['time'], unit='s')
+    df.set_index('Date', inplace=True)
+    df = df.rename(columns={'Close':'Price','Volume':'Vol.'})[["Open","High","Low","Price","Vol."]]
+    return df.astype(float)
+
+
+def _load_live__data() -> pd.DataFrame:
+    """
+    Try Kraken first, then fallback to local CSV.
     """
     try:
-        model = load_model(MODEL_PATH)
-        scaler = joblib.load(SCALER_PATH)
-        print("Model and scaler loaded successfully.")
-        return model, scaler
+        df = _fetch_kraken()
+        if len(df) >= TIME_STEP + 50:
+            return df
     except Exception as e:
-        print(f"Error loading model or scaler: {e}")
-        return None, None
+        print(f"Could not fetch from Kraken, falling back to CSV. Error: {e}")
+        pass
 
-def make_prediction(model, scaler):
+    # Fallback to static CSV
+    print("Fetching data from local CSV file.")
+    df = pd.read_csv(CSV_PATH, index_col=0, parse_dates=True)
+    df = df.rename(columns={
+        'Price':'Price', 'Vol.':'Vol.', 'Open':'Open', 'High':'High', 'Low':'Low'
+    })[["Open","High","Low","Price","Vol."]]
+    return df.astype(float)
+
+
+def _prepare_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Generates a prediction using the pre-loaded model and scaler.
-    This function is now very fast.
+    Add technical indicators and clean data.
     """
-    try:
-        # 1. Fetch live data
-        btc_data = yf.download(tickers='BTC-USD', period='2d', interval='1h')
-        if btc_data.empty:
-            return {"error": "Failed to fetch live BTC data."}
+    df['Vol.'] = df['Vol.'].astype(float)
+    df.ta.rsi(close=df['Price'], append=True)
+    df.ta.macd(close=df['Price'], append=True)
+    df['SMA_15'] = df['Price'].rolling(window=15).mean()
+    return df.dropna()
 
-        # 2. Add technical indicators
-        btc_data.ta.rsi(append=True)
-        btc_data.ta.macd(append=True)
-        btc_data.ta.bbands(append=True)
-        btc_data.dropna(inplace=True)
 
-        # 3. Get the most recent data point for prediction
-        last_row = btc_data.iloc[[-1]]
-        current_price = last_row['Close'].iloc[0]
+def make_prediction() -> dict:
+    """
+    Fetch live data, prepare inputs, run the model,
+    and return a summary dict with time, prices, action, SL, TP.
+    """
+    # Load and trim data
+    df = _load_live_data().tail(TIME_STEP + 50)
 
-        # 4. Scale the features
-        feature_columns = ['Open', 'High', 'Low', 'Close', 'Volume', 'RSI_14', 'MACD_12_26_9', 'MACDh_12_26_9', 'MACDs_12_26_9', 'BBL_20_2.0', 'BBM_20_2.0', 'BBU_20_2.0', 'BBB_20_2.0', 'BBP_20_2.0']
-        features = last_row[feature_columns]
-        scaled_features = scaler.transform(features)
-        scaled_features = np.reshape(scaled_features, (scaled_features.shape[0], 1, scaled_features.shape[1]))
+    # Compute indicators
+    df = _prepare_dataframe(df)
 
-        # 5. Make prediction
-        prediction_scaled = model.predict(scaled_features)
-        
-        # Create a dummy array to inverse transform the prediction
-        dummy_array = np.zeros((1, len(feature_columns)))
-        dummy_array[0, 3] = prediction_scaled[0, 0] # Index 3 is 'Close'
-        predicted_price = scaler.inverse_transform(dummy_array)[0, 3]
+    # Build prediction window
+    window = df.tail(TIME_STEP)
+    if len(window) < TIME_STEP:
+        return {"error": f"Need {TIME_STEP} rows; got {len(window)}"}
 
-        # 6. Determine action and SL/TP
-        action = "BUY" if predicted_price > current_price else "SELL"
-        stop_loss = current_price * 0.998 if action == "BUY" else current_price * 1.002
-        take_profit = current_price * 1.002 if action == "BUY" else current_price * 0.998
+    # Scale features
+    feature_cols = list(_scaler.feature_names_in_)
+    data_in = window[feature_cols]
+    scaled  = _scaler.transform(data_in)
 
-        return {
-            "current_price": float(current_price),
-            "predicted_price": float(predicted_price),
-            "action": action,
-            "stop_loss": float(stop_loss),
-            "take_profit": float(take_profit),
-            "time": datetime.now(TIMEZONE).strftime('%Y-%m-%d %H:%M:%S')
-        }
+    # Predict
+    X = scaled.reshape(1, TIME_STEP, scaled.shape[1])
+    pred_s = _model.predict(X, verbose=0)[0,0]
 
-    except Exception as e:
-        return {"error": f"An error occurred during prediction: {str(e)}"}
+    # Inverse scale
+    dummy  = np.zeros((1, scaled.shape[1])); dummy[0,0] = pred_s
+    pred_p = _scaler.inverse_transform(dummy)[0,0]
 
+    # Current price
+    curr_p = window['Price'].iloc[-1]
+
+    # Trading logic with tight SL/TP
+    action, sl, tp = "HOLD", None, None
+    buffer = BUY_THRESHOLD
+
+    if pred_p > curr_p * (1 + BUY_THRESHOLD):
+        action = "BUY"
+        sl     = curr_p * (1 - buffer)
+        tp     = pred_p * (1 - buffer)
+    elif pred_p < curr_p * (1 - SELL_THRESHOLD):
+        action = "SELL"
+        sl     = curr_p * (1 + buffer)
+        tp     = pred_p * (1 + buffer)
+
+    # --- TIMEZONE ADJUSTMENT ---
+    jakarta_tz = pytz.timezone('Asia/Jakarta')
+    now_jakarta = datetime.datetime.now(jakarta_tz)
+
+    return {
+        "time":              now_jakarta.strftime("%Y-%m-%d %H:%M:%S"),
+        "current_price":   float(curr_p),
+        "predicted_price": float(pred_p),
+        "action":            action,
+        "stop_loss":       sl,
+        "take_profit":     tp
+    }
