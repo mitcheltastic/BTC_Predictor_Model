@@ -7,6 +7,4 @@ scikit-learn==1.4.2
 joblib==1.4.2
 streamlit==1.46.1
 requests>=2.31.0
-fastapi
-uvicorn
 pytz

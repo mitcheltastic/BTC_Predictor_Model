@@ -1,48 +1,21 @@
 import streamlit as st
 import pandas as pd
-import uvicorn
-import threading
-import time
 from predictor_api import make_prediction
-from api import app as fastapi_app
 
-# --- Configuration ---
-API_HOST = "0.0.0.0"
-API_PORT = 8000
+# --- API Endpoint Logic ---
+# Check if the 'endpoint' query parameter is set to 'api'
+if st.query_params.get("endpoint") == "api":
+    # Run the prediction
+    result = make_prediction()
+    # Return the result as JSON and stop the script
+    st.json(result)
+    st.stop()
 
-# --- Function to run the API ---
-def run_api():
-    """Starts the FastAPI server using uvicorn."""
-    try:
-        uvicorn.run(fastapi_app, host=API_HOST, port=API_PORT)
-    except Exception as e:
-        # This error will be printed in the console where streamlit is running
-        print(f"Error starting API: {e}")
-
-# --- Start API in a background thread if not already running ---
-# We use st.session_state to ensure this only runs once per session.
-if 'api_thread' not in st.session_state:
-    print("Starting FastAPI server in a background thread.")
-    api_thread = threading.Thread(target=run_api, daemon=True)
-    api_thread.start()
-    st.session_state.api_thread = api_thread
-    # Give the server a moment to start up
-    time.sleep(2)
+# --- Regular Streamlit UI (runs if the endpoint parameter is not present) ---
 
 # ─── Page setup ─────────────────────────
 st.set_page_config(page_title="BTC AI Predictor", layout="wide")
 st.title("🔮 1-Hour BTC Price Prediction")
-
-# --- API Status in Sidebar ---
-st.sidebar.header("API Status")
-st.sidebar.success(f"✅ API Endpoint is running.")
-st.sidebar.markdown(f"""
-The prediction API is available for other applications to use.
-
-**Endpoint URL:**
-If you are running this on your local machine, the full URL is:
-[`http://localhost:{API_PORT}/api.json`](http://localhost:{API_PORT}/api.json)
-""")
 
 # ─── Run prediction for Streamlit UI ───────────────────
 result = make_prediction()
@@ -77,3 +50,4 @@ else:
 st.markdown("---")
 if st.button("🔄 Refresh Now"):
     st.rerun()
+
